@@ -89,18 +89,18 @@ pip install -r requirements.txt
 
 ### 遇到的問題與解決方案 (Troubleshooting)
 
-1.  **CUDA Library Mismatch (**`**libcudart.so.12**` **missing)**
+1.  **CUDA Library Mismatch (`libcudart.so.12` missing)**
     *   **原因**: 系統環境 CUDA 13.0，但 vLLM (0.15.1) 預編譯包依賴 CUDA 12 的 `libcudart.so.12`。
     *   **解決**: 安裝與 vLLM 兼容的 CUDA Runtime 並設定 `LD_LIBRARY_PATH`。
     *   指令：
         ```bash
         pip install nvidia-cuda-runtime-cu12
-        export LD_LIBRARY_PATH=$PWD/.venv/lib/python3.12/site-packages/nvidia/cuda_runtime/lib:$LD_LIBRARY_PATH
         ```
+    *   **工具腳本 (`run_offline.sh`)**: 由於 `LD_LIBRARY_PATH` 每次重啟 terminal 都會失效，我們建立了一個啟動腳本來自動處理。
 
-2.  **Missing Python.h (**`**fatal error: Python.h**`**)**
-    *   **原因**: vLLM 嘗試使用 `torch.compile` (Inductor) 來優化模型執行，這需要 Python 開發頭文件 (`python3-dev`)。但在無 root 權限且系統未安裝該套件的情況下會編譯失敗。
-    *   **解決**: 在 `LLM` 初始化時加入 `enforce_eager=True`，強制使用 PyTorch Eager 模式，跳過即時編譯。
+2.  **Compilation Crash (`EngineCore died unexpectedly`)** (2026/02/18 更新)
+    *   **原因**: 即便安裝了 `python3-dev` 解決了 `Python.h` 缺失問題，在 NVIDIA GB10 (Blackwell) + ARM64 架構下，Triton/Inductor 的 CUDA Graph 編譯仍會產生大量 PTX 錯誤並導致進程崩潰。
+    *   **解決**: 在 `LLM` 初始化時加入 `enforce_eager=True`，強制使用 PyTorch Eager 模式，跳過編譯以換取穩定性。
 
 ### 程式碼範例 (`01_offline_inference.py`)
 
@@ -118,7 +118,7 @@ prompts = [
 sampling_params = SamplingParams(temperature=0.8, top_p=0.95, max_tokens=100)
 
 # 3. 初始化引擎
-# enforce_eager=True 是關鍵：避免在無 python-dev 環境下因編譯失敗而崩潰
+# enforce_eager=True 是關鍵：避免在新架構(Blackwell)下因 CUDA Graph 編譯失敗而崩潰
 llm = LLM(model="Qwen/Qwen2.5-0.5B-Instruct", trust_remote_code=True, enforce_eager=True)
 
 # 4. 生成
@@ -130,4 +130,13 @@ for output in outputs:
     generated_text = output.outputs[0].text
     print(f"Prompt: {prompt!r}")
     print(f"Generated text: {generated_text!r}")
+```
+
+### 方便的啟動腳本 (`run_offline.sh`)
+```bash
+#!/bin/bash
+PROJECT_ROOT="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+# 設定 LD_LIBRARY_PATH 指向 .venv 中的 nvidia runtime
+export LD_LIBRARY_PATH="$PROJECT_ROOT/.venv/lib/python3.12/site-packages/nvidia/cuda_runtime/lib:$LD_LIBRARY_PATH"
+"$PROJECT_ROOT/.venv/bin/python" "$PROJECT_ROOT/01_offline_inference.py"
 ```
