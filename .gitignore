@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environment
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# Environment Variables
+.env
+
+# vLLM/HuggingFace Cache (Optional, if you download models locally)
+models/
+*.pt
+*.bin
+*.safetensors
