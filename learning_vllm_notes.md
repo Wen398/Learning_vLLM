@@ -140,3 +140,102 @@ PROJECT_ROOT="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 export LD_LIBRARY_PATH="$PROJECT_ROOT/.venv/lib/python3.12/site-packages/nvidia/cuda_runtime/lib:$LD_LIBRARY_PATH"
 "$PROJECT_ROOT/.venv/bin/python" "$PROJECT_ROOT/01_offline_inference.py"
 ```
+
+## 5. 實作記錄：Online Serving (在線服務)
+
+在線服務將 vLLM 轉變為一個常駐的 API Server，讓多個 Client 可以同時發送請求。這對於構建 Agent 系統至關重要。
+
+### Server 端啟動 (`run_server.sh`)
+
+類似於 Offline Inference，我們需要處理 `LD_LIBRARY_PATH` 與 `enforce_eager` 問題。這次我們使用 vLLM 內建的 OpenAI API 入口點。
+
+```bash
+#!/bin/bash
+PROJECT_ROOT="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+# 1. 設定 CUDA Runtime 路徑
+export LD_LIBRARY_PATH="$PROJECT_ROOT/.venv/lib/python3.12/site-packages/nvidia/cuda_runtime/lib:$LD_LIBRARY_PATH"
+
+echo "Starting vLLM OpenAI API Server..."
+# 2. 啟動 Server
+# --enforce-eager: 針對 Blackwell 架構的穩定性修正
+"$PROJECT_ROOT/.venv/bin/python" -m vllm.entrypoints.openai.api_server \
+    --model "Qwen/Qwen2.5-0.5B-Instruct" \
+    --port 8000 \
+    --enforce-eager \
+    --trust-remote-code \
+    --max-model-len 2048
+```
+
+在 Terminal 1 執行：
+```bash
+bash run_server.sh
+```
+
+### Client 端調用 (`02_online_client.py`)
+
+使用標準的 `openai` Python SDK 進行連接。這證明了我們的 Server 與 OpenAI 協議完全兼容。
+
+```python
+from openai import OpenAI
+
+# 1. 初始化 Client
+client = OpenAI(
+    base_url="http://localhost:8000/v1",
+    api_key="EMPTY", # 本地部署通常不需要 Key
+)
+
+# 2. 發送請求 (Streaming)
+stream = client.chat.completions.create(
+    model="Qwen/Qwen2.5-0.5B-Instruct",
+    messages=[{"role": "user", "content": "你好，請自我介紹。"}],
+    stream=True,
+)
+
+for chunk in stream:
+    if chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="", flush=True)
+```
+
+在 Terminal 2 執行：
+```bash
+# 確保已進入 venv
+source .venv/bin/activate
+python 02_online_client.py
+```
+
+## 6. 實作記錄：關鍵參數調優 (Key Parameters)
+
+在 AI Agent 開發中，控制模型輸出的穩定性與格式至關重要。我們透過 `03_sampling_params.py` 來實驗這些參數。
+
+### 核心參數說明
+
+1.  **Temperature (溫度)**:
+    *   `0.0`: 幾乎無隨機性，適合邏輯推導、數學運算、程式碼生成。
+    *   `0.7-1.0`: 增加多樣性，適合創意寫作。
+2.  **Max Tokens**:
+    *   限制生成的最大長度，避免模型生成過多無意義的內容，或陷入無限循環。
+3.  **Stop Sequences (停止序列)**:
+    *   **Agent 的靈魂**。讓模型在生成特定字串（如 `Observation:` 或 `User:`）時立即停止，將控制權交還給程式碼（Function Calling）。
+
+### 實驗代碼 (`03_sampling_params.py`)
+
+這個腳本展示了如何動態調整這些參數：
+
+```python
+# 設定參數範例
+response = client.chat.completions.create(
+    model="Qwen/Qwen2.5-0.5B-Instruct",
+    messages=[{"role": "user", "content": "..."}],
+    temperature=0.0,      # 穩定輸出
+    max_tokens=50,        # 限制長度
+    stop=["Observation:"] # Agent 停止信號
+)
+```
+
+### 執行方式
+確保 `run_server.sh` 正在另一個 Terminal 運行中，然後執行：
+```bash
+python 03_sampling_params.py
+```
+
