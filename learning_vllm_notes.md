@@ -338,3 +338,50 @@ python 03_sampling_params.py
 3.  再次執行 `python 02_online_client.py` 確保服務仍能正常運作。
 
 
+
+## 9. 實作記錄：CLI 數據處理工具實戰 (CLI News Classifier)
+
+為了鞏固 vLLM 的學習成果，我們構建了一個模擬的「新聞分類與摘要工具」。這個專案展示了 vLLM 在實際數據處理任務中的兩大優勢：
+1.  **高吞吐量 (High Throughput)**: 使用 Offline Inference 模式一次性處理多篇文章，比逐篇呼叫 API 快得多。
+2.  **結構化輸出 (Structured Output)**: 通過 Prompt Engineering 強制模型輸出 JSON 格式，便於程式後續處理。
+
+### 核心功能 (`05_news_classifier.py`)
+
+這個腳本模擬了一個 ETL (Extract, Transform, Load) 流程中的 Transform 步驟：
+*   **Input**: 一組未分類的原始長新聞文本。
+*   **Process**: 使用 `Qwen2.5-0.5B-Instruct` 進行並行推理。
+*   **Prompting**: 使用 System Prompt 定義 JSON Schema，要求模型輸出 `category` 和 `summary`。
+*   **Output**: 解析 JSON 並印出結構化報告。
+
+### 關鍵技術點
+
+1.  **批次處理 (Batch Processing)**:
+    我們將所有要處理的文章放入一個 List，一次性傳給 `llm.generate(prompts)`。vLLM 內部的 Scheduler 會自動安排 Continuous Batching，這比寫一個 for-loop 逐個 generate 效率高出數倍。
+
+2.  **Tokenizer 手動處理**:
+    由於 `vllm.LLM` 的輸入是 Prompt String (或 Token IDs)，為了讓 Instruct 模型發揮最佳效果，我們手動使用了 `AutoTokenizer` 的 `apply_chat_template` 方法。
+    ```python
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    # 將對話結構轉為模型專用的 Prompt String (如 <|im_start|>system...)
+    text_prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    ```
+
+3.  **JSON Mode Hack**:
+    雖然 vLLM 有進階的 Guided Decoding，但最通用的方法是在 System Prompt 中給出範例，並將 `temperature` 設低 (0.1)，這能讓小模型也能穩定輸出 JSON。
+
+### 執行腳本 (`run_news_classifier.sh`)
+
+```bash
+#!/bin/bash
+PROJECT_ROOT="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+export LD_LIBRARY_PATH="$PROJECT_ROOT/.venv/lib/python3.12/site-packages/nvidia/cuda_runtime/lib:$LD_LIBRARY_PATH"
+
+echo "Running News Classifier Demo..."
+"$PROJECT_ROOT/.venv/bin/python" "$PROJECT_ROOT/05_news_classifier.py"
+```
+
+### 執行指令
+```bash
+bash run_news_classifier.sh
+```
+預期會看到每篇文章被快速分類並生成摘要，且格式整齊劃一。
