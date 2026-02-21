@@ -239,3 +239,51 @@ response = client.chat.completions.create(
 python 03_sampling_params.py
 ```
 
+## 7. 實作記錄：硬體適配與量化 (Hardware & Quantization)
+
+在實際生產環境中，尤其是資源有限的情況下，直接部署全參數模型往往不切實際。我們透過 `run_production_server.sh` 來學習如何控制硬體資源。
+
+### 1. 顯存控制 (VRAM Management)
+
+即便是小模型，vLLM 預設也會佔用 **90%** 的顯存來最大化 KV Cache (為了吞吐量)。這在單卡多模型部署時會造成問題。
+
+*   **`--gpu-memory-utilization 0.5`**: 強制 vLLM 只使用 50% 的顯存。
+    *   **應用場景**:
+        *   同時部署 LLM 與 Embedding 模型。
+        *   預留顯存給作業系統或其他應用程式。
+*   **`--max-model-len 4096`**: 限制最大上下文長度。
+    *   **原理**: 上下文越長，KV Cache 佔用的顯存越多。將其限制在合理範圍 (如 4k 或 8k) 可以顯著節省顯存。
+
+### 2. 量化 (Quantization)
+
+雖然本次實驗使用非量化模型，但在部署 70B 等大模型時，量化是必須的。
+
+*   **常規用法**:
+    ```bash
+    # 假設我們下載了 Qwen2.5-72B-Instruct-AWQ
+    python -m vllm.entrypoints.openai.api_server \
+        --model Qwen/Qwen2.5-72B-Instruct-AWQ \
+        --quantization awq \
+        --tensor-parallel-size 4
+    ```
+*   **關鍵參數**:
+    *   `--quantization awq`: 指定量化格式 (AWQ, GPTQ, SqueezeLLM)。
+    *   `--tensor-parallel-size`: 指定使用幾張 GPU 進行張量並行 (Tensor Parallelism)。
+
+### 3. 實作腳本 (`run_production_server.sh`)
+
+我們建立了一個模擬生產環境配置的腳本：
+
+```bash
+"$PROJECT_ROOT/.venv/bin/python" -m vllm.entrypoints.openai.api_server \
+    --model "Qwen/Qwen2.5-0.5B-Instruct" \
+    --gpu-memory-utilization 0.5 \  # 只用一半顯存
+    --max-model-len 4096            # 限制上下文長度
+```
+
+### 驗證方式
+1.  執行 `bash run_production_server.sh`。
+2.  觀察 Terminal 輸出，確認顯存佔用率 (vLLM 會顯示 `GPU Memory Usage` 相關資訊)。
+3.  再次執行 `python 02_online_client.py` 確保服務仍能正常運作。
+
+
