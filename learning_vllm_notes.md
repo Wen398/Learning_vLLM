@@ -204,6 +204,57 @@ source .venv/bin/activate
 python 02_online_client.py
 ```
 
+## 8. 實作記錄：介面與模板 (Interface & Templates)
+
+Chat Template 是現代 Instruct 模型（如 GPT-4, Qwen, Llama 3）正確理解各種角色（System, User, Assistant）的關鍵。
+
+傳統的模型只接受一串文字，而 Chat 模型需要結構化的輸入。vLLM 能夠自動讀取模型內建的 `tokenizer_config.json` 來套用正確的模板。
+
+### 為什麼這對 Agent 很重要？
+
+Agent 的核心邏輯通常是寫在 **System Prompt** 中的。例如：「你是一個使用 Google Search 工具的助手」。
+
+如果 Chat Template 處理不正確：
+1.  模型可能分不清哪部分是用戶說的，哪部分是系統指令。
+2.  這會導致 "Prompt Injection" 風險，或者 Agent 不聽指揮。
+
+### vLLM 的自動處理機制
+
+當我們使用 OpenAI API (`/v1/chat/completions`) 時：
+1.  Client 送出 JSON 格式的消息列表 (`[{"role": "system"...}, {"role": "user"...}]`)。
+2.  vLLM Server 在後台自動使用 Qwen 的模板將其轉換成模型能看懂的字串：
+    ```text
+    <|im_start|>system
+    你是一個助手...<|im_end|>
+    <|im_start|>user
+    你好<|im_end|>
+    <|im_start|>assistant
+    ...
+    ```
+    *(註：不同模型有不同模板，vLLM 會自動適配)*
+
+### 實驗代碼 (`04_chat_templates.py`)
+
+我們透過兩個極端的例子來測試模板的有效性：
+1.  **角色扮演**：設定一個性格極端的 system prompt（刻薄助手），看模型是否會被 user query 影響而恢復正常（如果不正常，代表 System Prompt 權重夠高）。
+2.  **格式限制**：強制要求 JSON 輸出。這對於 Agent 的 Tool Call 解析至關重要。
+
+### 執行方式
+確保 Server 運行中，執行：
+```bash
+python 04_chat_templates.py
+```
+
+### 故障排除：小模型的指令遵循問題
+在初步實驗中，我們發現 0.5B 小模型容易忽視 System Prompt。這在小模型中很常見。
+
+**解決方案**：
+1.  **降低 Temperature**: 設為 `0.1` 或 `0.0`。
+2.  **強化 Prompt**: 在 System Prompt 中加入「不要正面回答」、「嚴格遵守」等強烈語氣。
+3.  **Few-Shot Prompting (最有效)**: 直接在對話歷史中提供一個「問答範例」。
+
+我們已更新 `04_chat_templates.py` 採用以上技巧，這也是開發穩健 Agent 的不二法門。
+
 ## 6. 實作記錄：關鍵參數調優 (Key Parameters)
 
 在 AI Agent 開發中，控制模型輸出的穩定性與格式至關重要。我們透過 `03_sampling_params.py` 來實驗這些參數。
