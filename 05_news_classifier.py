@@ -44,15 +44,10 @@ system_prompt = """
 }
 """
 
-def main():
-    # 改用 7B 模型，這是目前 CP 值最高的中文模型選擇，指令遵循能力遠強於 0.5B
-    model_name = "Qwen/Qwen2.5-7B-Instruct"
-    
-    # 3. 準備 Prompts (使用 Tokenizer 套用 Chat Template)
-    # vLLM 的 LLM 類別主要接受 string list，所以我們先用 tokenizer 轉好
-    print(f"Loading tokenizer for {model_name}...")
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    
+def build_prompts(tokenizer, articles, system_prompt):
+    """
+    將文章列表轉換為模型可接受的 prompt 格式
+    """
     prompts = []
     for article in articles:
         messages = [
@@ -62,6 +57,38 @@ def main():
         # apply_chat_template 會幫我們加上 <|im_start|>... 這些標籤
         text_prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         prompts.append(text_prompt)
+    return prompts
+
+def parse_llm_output(generated_text):
+    """
+    解析 LLM 的輸出，處理可能的 markdown 格式並回傳 JSON 物件
+    """
+    try:
+        # 嘗試尋找 JSON 物件的開頭與結尾，過濾掉前後的雜訊 (包括 Markdown 標籤)
+        start_idx = generated_text.find("{")
+        end_idx = generated_text.rfind("}")
+        
+        if start_idx != -1 and end_idx != -1:
+             clean_text = generated_text[start_idx : end_idx + 1]
+        else:
+             # 如果找不到大括號，退回使用簡單的 replace 作為 fallback
+             clean_text = generated_text.replace("```json", "").replace("```", "").strip()
+             
+        data = json.loads(clean_text)
+        return data
+    except json.JSONDecodeError as e:
+        raise ValueError(f"無法解析 JSON: {generated_text}") from e
+
+def main():
+    # 改用 7B 模型，這是目前 CP 值最高的中文模型選擇，指令遵循能力遠強於 0.5B
+    model_name = "Qwen/Qwen2.5-7B-Instruct"
+    
+    # 3. 準備 Prompts (使用 Tokenizer 套用 Chat Template)
+    # vLLM 的 LLM 類別主要接受 string list，所以我們先用 tokenizer 轉好
+    print(f"Loading tokenizer for {model_name}...")
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    
+    prompts = build_prompts(tokenizer, articles, system_prompt)
 
     # 4. 初始化 vLLM 引擎
     # 注意: 根據你的環境 (Blackwell)，我們保留 allow_user_override_backend 或 enforce_eager 設定
@@ -71,7 +98,8 @@ def main():
         model=model_name,
         trust_remote_code=True,
         enforce_eager=True, # 針對你的環境特別加入
-        max_model_len=2048
+        max_model_len=2048,
+        gpu_memory_utilization=0.6, # 降低顯存佔用率 (預設 0.9)，避免 OOM
     )
 
     # 5. 設定採樣參數
@@ -98,17 +126,13 @@ def main():
     for i, output in enumerate(outputs):
         generated_text = output.outputs[0].text
         print(f"--- Article {i+1} ---")
-        # 嘗試解析 JSON (簡單示範)
         try:
-            # 有時候模型會輸出 Markdown code block (```json ... ```)，這裡做簡單清洗
-            clean_text = generated_text.replace("```json", "").replace("```", "").strip()
-            data = json.loads(clean_text)
+            data = parse_llm_output(generated_text)
             print(f"Original Length: {len(articles[i])} 字符")
             # 直接印出解析後的標準 JSON
             print(json.dumps(data, ensure_ascii=False, indent=4))
-        except json.JSONDecodeError:
-            print("無法解析 JSON，原始輸出如下：")
-            print(generated_text)
+        except ValueError as e:
+            print(e)
         print()
 
 if __name__ == "__main__":

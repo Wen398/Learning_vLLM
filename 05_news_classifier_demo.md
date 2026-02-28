@@ -95,6 +95,9 @@ sampling_params = SamplingParams(
 在 Terminal 中執行：
 
 ```bash
+# 賦予執行權限 (若尚未設定)
+chmod +x run_server.sh
+
 bash run_news_classifier.sh
 ```
 
